@@ -119,42 +119,68 @@ class GeminiVQAGenerator:
         return qa_pairs
 
     def generate_dataset(self, image_dir: str, labels_file: str, output_csv: str, num_images: int = None, qa_per_image: int = 10):
-        """Generate the complete VQA dataset."""
+        """
+        Generate the complete VQA dataset.
+        Supports resuming from existing CSV to handle API limits.
+        """
         logger.info("Loading flower labels...")
         labels = self.load_oxford_flowers_labels(labels_file)
-        flower_categories = list(set(labels.values()))
         
-        self.question_generator = QuestionGenerator(flower_categories)
-        self.validator = VQAValidator(flower_categories)
+        self.question_generator = QuestionGenerator(list(set(labels.values())))
+        self.validator = VQAValidator(list(set(labels.values())))
         
+        # Check for existing progress
+        existing_images = set()
+        all_qa_pairs = []
+        
+        if os.path.exists(output_csv):
+            try:
+                existing_df = pd.read_csv(output_csv)
+                existing_images = set(existing_df['image_path'].unique())
+                all_qa_pairs = existing_df.to_dict('records')
+                logger.info(f"Found existing dataset with {len(existing_images)} images. Resuming...")
+            except Exception as e:
+                logger.warning(f"Could not load existing CSV: {e}. Starting fresh.")
+        
+        # Get all potential images
         image_paths = sorted([
             os.path.join(image_dir, f) for f in os.listdir(image_dir) 
             if f.endswith(('.jpg', '.jpeg', '.png'))
         ])
         
-        if num_images:
-            image_paths = image_paths[:num_images]
-            
-        logger.info(f"Processing {len(image_paths)} images using {self.model_name}...")
+        # Filter out already processed images
+        images_to_process = [img for img in image_paths if img not in existing_images]
         
-        all_qa_pairs = []
-        for image_path in tqdm(image_paths, desc="Generating QA pairs"):
+        # Apply num_images limit (counting what's already done)
+        if num_images:
+            remaining_slots = start_limit = num_images - len(existing_images)
+            if remaining_slots <= 0:
+                logger.info(f"Target of {num_images} images already reached!")
+                return pd.DataFrame(all_qa_pairs)
+            images_to_process = images_to_process[:remaining_slots]
+            
+        logger.info(f"Processing {len(images_to_process)} new images using {self.model_name}...")
+        
+        new_qa_pairs = []
+        for i, image_path in enumerate(tqdm(images_to_process, desc="Generating QA pairs")):
             image_filename = os.path.basename(image_path)
             if image_filename not in labels:
                 continue
                 
             flower_name = labels[image_filename]
             qa_pairs = self.generate_qa_for_image(image_path, flower_name, qa_per_image)
+            
+            new_qa_pairs.extend(qa_pairs)
             all_qa_pairs.extend(qa_pairs)
             
-            # Periodic save
-            if len(all_qa_pairs) % 50 == 0:
+            # Periodic save (every 10 images)
+            if (i + 1) % 10 == 0:
                 pd.DataFrame(all_qa_pairs).to_csv(output_csv, index=False)
         
         # Final save
         df = pd.DataFrame(all_qa_pairs)
         df.to_csv(output_csv, index=False)
-        logger.info(f"Dataset saved to: {output_csv} with {len(df)} QA pairs")
+        logger.info(f"Dataset saved to: {output_csv} with {len(df)} QA pairs ({len(df['image_path'].unique())} images)")
         return df
 
     def generate_statistics(self, df: pd.DataFrame, output_json: str):
