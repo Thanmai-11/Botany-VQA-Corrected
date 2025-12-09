@@ -75,13 +75,19 @@ class GeminiVQAGenerator:
                         if 'gemini-1.5-pro' in m:
                             model_name = m
                             logger.info(f"-> Switching to valid model: {model_name}")
+                            fallback_found = True
                             break
+                            
+                # HARD FALLBACK: If we still haven't found a valid model in the list,
+                # force a known-good alias instead of crashing with the original name.
+                if not fallback_found and model_name == "gemini-1.5-flash":
+                    model_name = "gemini-1.5-flash-latest"
+                    logger.warning(f"-> Could not find model in list. Forcing hard fallback to: {model_name}")
 
         except Exception as e:
             logger.warning(f"Could not verify models (API key issue?): {e}")
 
         self.model = genai.GenerativeModel(model_name)
-        self.model_name = model_name
         self.model_name = model_name
         
         logger.info(f"Initialized Gemini Generator using model: {model_name}")
