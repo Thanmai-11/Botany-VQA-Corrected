@@ -26,13 +26,13 @@ logger = logging.getLogger(__name__)
 class GeminiVQAGenerator:
     """Generate image-grounded VQA dataset using Google Gemini models."""
     
-    def __init__(self, api_key: str, model_name: str = "gemini-1.5-flash-001"):
+    def __init__(self, api_key: str, model_name: str = "gemini-2.0-flash"):
         """
         Initialize the Gemini dataset generator.
         
         Args:
             api_key: Google AI Studio API Key
-            model_name: Gemini model to use (default: 'gemini-1.5-flash-001')
+            model_name: Gemini model to use (default: 'gemini-2.0-flash')
         """
         if not api_key:
             raise ValueError("API Key is required. Get one at https://aistudio.google.com/")
@@ -46,9 +46,16 @@ class GeminiVQAGenerator:
             available_models = [m.name.replace('models/', '') for m in genai.list_models()]
             logger.info(f"Available models: {available_models}")
             
-            # auto-correct common aliases
-            if model_name == "gemini-1.5-flash":
-                if "gemini-1.5-flash-001" in available_models:
+            # auto-correct common aliases and upgrade to 2.0 if 1.5 not found
+            if model_name not in available_models:
+                # Prefer 2.0 Flash
+                if "gemini-2.0-flash" in available_models:
+                    model_name = "gemini-2.0-flash"
+                    logger.info(f"-> Switching to newer model: {model_name}")
+                elif "gemini-2.0-flash-exp" in available_models:
+                     model_name = "gemini-2.0-flash-exp"
+                     logger.info(f"-> Switching to newer model: {model_name}")
+                elif "gemini-1.5-flash-001" in available_models:
                     model_name = "gemini-1.5-flash-001"
                     logger.info(f"-> Auto-corrected model name to: {model_name}")
                 elif "gemini-1.5-flash-latest" in available_models:
@@ -58,21 +65,30 @@ class GeminiVQAGenerator:
             # Check if requested model exists (handling 'models/' prefix)
             if model_name not in available_models:
                 logger.warning(f"⚠️ Requested model '{model_name}' not found in available list!")
-                logger.warning("Trying to find a valid Gemini 1.5 vision model...")
+                logger.warning("Trying to find a valid vision model...")
                 
-                # Auto-fallback to any valid 1.5 flash/pro model
+                # Auto-fallback to any valid flush/pro model (preferring 2.0, then 1.5)
                 fallback_found = False
+                # Prioritize 2.0 models
                 for m in available_models:
-                    if 'gemini-1.5-flash' in m and 'vision' not in m: # 1.5 models are multimodal by default
+                    if 'gemini-2.0-flash' in m:
                         model_name = m
                         logger.info(f"-> Switching to valid model: {model_name}")
                         fallback_found = True
                         break
                 
                 if not fallback_found:
+                    for m in available_models:
+                        if 'gemini-1.5-flash' in m and 'vision' not in m: 
+                            model_name = m
+                            logger.info(f"-> Switching to valid model: {model_name}")
+                            fallback_found = True
+                            break
+                            
+                if not fallback_found:
                      # Try Pro as last resort
                     for m in available_models:
-                        if 'gemini-1.5-pro' in m:
+                        if 'pro' in m and 'vision' not in m:
                             model_name = m
                             logger.info(f"-> Switching to valid model: {model_name}")
                             fallback_found = True
@@ -80,8 +96,9 @@ class GeminiVQAGenerator:
                             
                 # HARD FALLBACK: If we still haven't found a valid model in the list,
                 # force a known-good alias instead of crashing with the original name.
-                if not fallback_found and model_name == "gemini-1.5-flash":
-                    model_name = "gemini-1.5-flash-latest"
+                if not fallback_found:
+                    # If user has 2.0 access but listing failed for some reason, guess 2.0
+                    model_name = "gemini-2.0-flash"
                     logger.warning(f"-> Could not find model in list. Forcing hard fallback to: {model_name}")
 
         except Exception as e:
