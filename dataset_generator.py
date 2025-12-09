@@ -74,15 +74,27 @@ class BotanyVQAGenerator:
             # Load image
             image = Image.open(image_path).convert('RGB')
             
-            # Prepare inputs
-            inputs = self.processor(image, question, return_tensors="pt").to(self.device)
+            # Prepare inputs with question as prompt
+            # For BLIP-2, we need to format the question properly
+            prompt = f"Question: {question} Answer:"
+            inputs = self.processor(images=image, text=prompt, return_tensors="pt").to(self.device)
             
             # Generate answer
             with torch.no_grad():
-                outputs = self.model.generate(**inputs, max_new_tokens=50)
+                outputs = self.model.generate(
+                    **inputs, 
+                    max_new_tokens=50,
+                    min_length=1,
+                    num_beams=5,
+                    temperature=1.0
+                )
             
             # Decode answer
             answer = self.processor.decode(outputs[0], skip_special_tokens=True)
+            
+            # Remove the prompt from the answer if it's included
+            if answer.startswith(prompt):
+                answer = answer[len(prompt):].strip()
             
             return answer.strip()
         
