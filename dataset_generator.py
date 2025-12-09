@@ -19,26 +19,54 @@ from vqa_validator import VQAValidator
 class BotanyVQAGenerator:
     """Generate image-grounded VQA dataset using vision-language models."""
     
-    def __init__(self, model_name: str = "Salesforce/blip2-opt-2.7b", device: str = None):
+    def __init__(self, model_name: str = "Salesforce/blip2-opt-2.7b", device: str = None, use_8bit: bool = True):
         """
         Initialize the dataset generator.
         
         Args:
             model_name: HuggingFace model name for VLM
             device: Device to run model on ('cuda', 'cpu', or None for auto)
+            use_8bit: Use 8-bit quantization to reduce memory usage (recommended for Colab)
         """
         self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"Using device: {self.device}")
         
-        # Load VLM model
+        # Clear GPU cache before loading
+        if self.device == 'cuda':
+            torch.cuda.empty_cache()
+            print(f"GPU Memory before loading: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+        
+        # Load VLM model with memory optimizations
         print(f"Loading model: {model_name}...")
+        print(f"8-bit quantization: {use_8bit}")
+        
         self.processor = Blip2Processor.from_pretrained(model_name)
-        self.model = Blip2ForConditionalGeneration.from_pretrained(
-            model_name,
-            torch_dtype=torch.float16 if self.device == 'cuda' else torch.float32
-        )
-        self.model.to(self.device)
+        
+        if use_8bit and self.device == 'cuda':
+            # Load with 8-bit quantization to save memory
+            self.model = Blip2ForConditionalGeneration.from_pretrained(
+                model_name,
+                load_in_8bit=True,
+                device_map="auto",
+                torch_dtype=torch.float16
+            )
+        else:
+            # Standard loading
+            self.model = Blip2ForConditionalGeneration.from_pretrained(
+                model_name,
+                torch_dtype=torch.float16 if self.device == 'cuda' else torch.float32
+            )
+            self.model.to(self.device)
+        
+        # Enable gradient checkpointing to save memory
+        if hasattr(self.model, 'gradient_checkpointing_enable'):
+            self.model.gradient_checkpointing_enable()
+        
         print("Model loaded successfully!")
+        
+        if self.device == 'cuda':
+            print(f"GPU Memory after loading: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+            print(f"GPU Memory reserved: {torch.cuda.memory_reserved()/1e9:.2f} GB")
         
         # Initialize utilities
         self.feature_extractor = VisualFeatureExtractor()
@@ -96,10 +124,18 @@ class BotanyVQAGenerator:
             if answer.startswith(prompt):
                 answer = answer[len(prompt):].strip()
             
+            # Clear GPU cache to prevent memory buildup
+            if self.device == 'cuda':
+                del inputs, outputs
+                torch.cuda.empty_cache()
+            
             return answer.strip()
         
         except Exception as e:
             print(f"Error processing {image_path}: {e}")
+            # Clear cache on error too
+            if self.device == 'cuda':
+                torch.cuda.empty_cache()
             return "Error"
     
     def generate_qa_for_image(
