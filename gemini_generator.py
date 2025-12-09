@@ -112,9 +112,10 @@ class GeminiVQAGenerator:
             time.sleep(sleep_time)
         self.last_request_time = time.time()
 
-    def ask_question(self, image_path: str, question: str) -> str:
+    def ask_questions_batch(self, image_path: str, questions: List[str]) -> Dict[str, str]:
         """
-        Ask a question about an image using Gemini.
+        Ask multiple questions about an image in a single API call.
+        Returns a dictionary mapping questions to answers.
         """
         try:
             self._wait_for_rate_limit()
@@ -122,38 +123,74 @@ class GeminiVQAGenerator:
             # Load image
             img = Image.open(image_path)
             
-            # Construct prompt
-            prompt = f"Answer this question about the flower image concisely: {question}"
+            # Construct batch prompt
+            prompt = (
+                "Analyze this flower image and answer the following questions.\n"
+                "Provide the output STRICTLY as a raw JSON object where keys are the questions and values are the concise answers.\n"
+                "Do not use Markdown formatting (no ```json blocks).\n\n"
+                "Questions:\n"
+            )
+            for q in questions:
+                prompt += f"- {q}\n"
             
             # Generate response
             response = self.model.generate_content([prompt, img])
-            return response.text.strip()
+            text_response = response.text.strip()
+            
+            # Clean up potential markdown formatting if the model disregards instructions
+            if text_response.startswith("```"):
+                text_response = text_response.replace("```json", "").replace("```", "").strip()
+            
+            try:
+                answers_dict = json.loads(text_response)
+                return answers_dict
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse JSON response for {image_path}: {text_response[:100]}...")
+                # Fallback: empty dict, will result in individual retires or errors
+                return {}
             
         except exceptions.ResourceExhausted:
-            logger.warning("Rate limit hit. Waiting 60 seconds...")
+            logger.warning("Rate limit hit in batch mode. Waiting 60 seconds...")
             time.sleep(60)
-            return self.ask_question(image_path, question)  # Retry
+            return self.ask_questions_batch(image_path, questions)  # Retry
         except Exception as e:
-            logger.error(f"Error processing {image_path}: {e}")
-            return "Error"
-
-    def load_oxford_flowers_labels(self, labels_file: str) -> Dict[str, str]:
-        with open(labels_file, 'r') as f:
-            return json.load(f)
+            logger.error(f"Error processing batch for {image_path}: {e}")
+            return {}
 
     def generate_qa_for_image(self, image_path: str, flower_name: str, num_questions: int = 10) -> List[Dict[str, any]]:
-        """Generate QA pairs for a single image."""
+        """Generate QA pairs for a single image using batch processing."""
         questions_meta = self.question_generator.generate_diverse_questions(flower_name, num_questions)
         qa_pairs = []
         
-        for q_meta in questions_meta:
+        # separate questions that need API calls
+        api_questions = []
+        api_indices = []
+        
+        # Pre-process questions
+        for idx, q_meta in enumerate(questions_meta):
+            if q_meta['question_type'] == 'yes_no' and q_meta.get('expected_answer_contains'):
+                # Already have answer
+                continue
+            api_questions.append(q_meta['question'])
+            api_indices.append(idx)
+        
+        # Make batch API call
+        if api_questions:
+            answers_map = self.ask_questions_batch(image_path, api_questions)
+        else:
+            answers_map = {}
+            
+        for idx, q_meta in enumerate(questions_meta):
             question = q_meta['question']
             
-            # Handle Yes/No questions logic without API call if possible, acts as optimization
+            # Determine answer
             if q_meta['question_type'] == 'yes_no' and q_meta.get('expected_answer_contains'):
                 answer = q_meta['expected_answer_contains'].capitalize()
             else:
-                answer = self.ask_question(image_path, question)
+                answer = answers_map.get(question, "Error generation failed")
+                if answer == "Error generation failed":
+                    # Optional: Retry individually or just log
+                    pass
             
             qa_pairs.append({
                 'image_path': image_path,
