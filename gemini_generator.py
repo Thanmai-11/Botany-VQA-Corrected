@@ -166,11 +166,36 @@ class GeminiVQAGenerator:
                 # Fallback: empty dict, will result in individual retires or errors
                 return {}
             
-        except exceptions.ResourceExhausted:
-            logger.warning("Rate limit hit in batch mode. Waiting 60 seconds...")
-            time.sleep(60)
+            try:
+                answers_dict = json.loads(text_response)
+                return answers_dict
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse JSON response for {image_path}: {text_response[:100]}...")
+                return {}
+            
+        except (exceptions.ResourceExhausted, exceptions.ServiceUnavailable, exceptions.TooManyRequests) as e:
+            # Parse retry time from error message if possible, or default to 60s
+            wait_time = 30
+            if "retry in" in str(e):
+                try:
+                    import re
+                    match = re.search(r"retry in ([\d\.]+)s", str(e))
+                    if match:
+                        wait_time = float(match.group(1)) + 2 # Add buffer
+                except:
+                    pass
+            
+            logger.warning(f"Rate limit hit. Waiting {wait_time:.1f} seconds before retrying...")
+            time.sleep(wait_time)
             return self.ask_questions_batch(image_path, questions)  # Retry
+            
         except Exception as e:
+            # Handle generic 429s that might come as other exceptions
+            if "429" in str(e):
+                 logger.warning(f"Rate limit (429) hit. Waiting 30s...")
+                 time.sleep(30)
+                 return self.ask_questions_batch(image_path, questions) # Retry
+
             logger.error(f"Error processing batch for {image_path}: {e}")
             return {}
 
