@@ -26,18 +26,39 @@ logger = logging.getLogger(__name__)
 class GeminiVQAGenerator:
     """Generate image-grounded VQA dataset using Google Gemini models."""
     
-    def __init__(self, api_key: str, model_name: str = "gemini-1.5-flash"):
+    def __init__(self, api_key: str, model_name: str = "gemini-1.5-flash-001"):
         """
         Initialize the Gemini dataset generator.
         
         Args:
             api_key: Google AI Studio API Key
-            model_name: Gemini model to use ('gemini-1.5-flash' or 'gemini-1.5-pro')
+            model_name: Gemini model to use (default: 'gemini-1.5-flash-001')
         """
         if not api_key:
             raise ValueError("API Key is required. Get one at https://aistudio.google.com/")
             
         genai.configure(api_key=api_key)
+        
+        # Debug: List available models to help with 404 errors
+        try:
+            logger.info("Verifying available models...")
+            available_models = [m.name for m in genai.list_models()]
+            logger.info(f"Available models: {available_models}")
+            
+            # Check if requested model exists
+            full_model_name = f"models/{model_name}"
+            if full_model_name not in available_models and model_name not in available_models:
+                logger.warning(f"⚠️ Requested model '{model_name}' not found in available list!")
+                logger.warning("Trying to find a valid Gemini 1.5 model...")
+                # Auto-fallback to a valid vision model if possible
+                for m in available_models:
+                    if 'gemini-1.5-flash' in m:
+                        model_name = m.replace('models/', '')
+                        logger.info(f"-> Switching to valid model: {model_name}")
+                        break
+        except Exception as e:
+            logger.warning(f"Could not list models (API key issue?): {e}")
+
         self.model = genai.GenerativeModel(model_name)
         self.model_name = model_name
         
