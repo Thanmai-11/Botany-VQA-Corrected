@@ -174,6 +174,10 @@ class GeminiVQAGenerator:
             logger.error(f"Error processing batch for {image_path}: {e}")
             return {}
 
+    def load_oxford_flowers_labels(self, labels_file: str) -> Dict[str, str]:
+        with open(labels_file, 'r') as f:
+            return json.load(f)
+
     def generate_qa_for_image(self, image_path: str, flower_name: str, num_questions: int = 10) -> List[Dict[str, any]]:
         """Generate QA pairs for a single image using batch processing."""
         questions_meta = self.question_generator.generate_diverse_questions(flower_name, num_questions)
